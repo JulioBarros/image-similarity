@@ -10,11 +10,11 @@
       <a href="index.html">Home</a>
       <h1>Similar images</h1>
       <div class="row justify-content-center">
-        <div class="col-md-4"><img class="img-thumbnail" src='{{target_image.uri}}'></img><div><a href="{{target_image.src}}">{{target_image.src | basename}}</a></div></div>
+        <div><img class="img-thumbnail" src='{{target_image.uri}}'></img><div><a href="{{target_image.src}}">{{target_image.src | basename}}</a></div></div>
       </div>
-      <div class="row">
+      <div class="row justify-content-center">
         {% for image in similar_images %}
-        <div  class="col-md-4"><a href="{{image.filename}}.html"><img class="img-thumbnail" src='{{image.uri}}'></img></a><div><a href="{{image.src}}">{{image.src | basename}}</a></div></div>
+        <div><a href="{{image.filename}}.html"><img class="img-thumbnail" src='{{image.uri}}'></img></a><div><a href="{{image.src}}">{{image.src | basename}}</a></div></div>
         {% endfor %}
       </div>
   </body>

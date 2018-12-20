@@ -9,7 +9,7 @@
     <div class="container">
       <a href="index.html">Home</a>
       <h1>Welcome to my image similarity search</h1>
-      <div id="image_row" class="row"></div>
+      <div id="image_row" class="row justify-content-center"></div>
 
         <script>
           var element = document.getElementById("image_row");
@@ -17,7 +17,7 @@
           for (var n = 0; n < 12; n++){
                               i = Math.floor(Math.random() * {{num_images}})
             var template = document.createElement('template');
-            let snip = `<div class='col-md-4'><a href='${i}.html'><img class='img-thumbnail' src='images/${i}.jpg'></img></a></div>`;
+            let snip = `<div><a href='${i}.html'><img class='img-thumbnail' src='images/${i}.jpg'></img></a></div>`;
                           template.innerHTML = snip;
                           console.log(snip);
                        element.appendChild(template.content.firstChild)
