@@ -17,5 +17,11 @@
         <div><a href="{{image.filename}}.html"><img class="img-thumbnail" src='{{image.uri}}'></img></a><div><a href="{{image.src}}">{{image.src | basename}}</a></div></div>
         {% endfor %}
       </div>
+      <h2>Dissimilar Images</h2>
+      <div class="row justify-content-center">
+        {% for image in dissimilar_images %}
+        <div><a href="{{image.filename}}.html"><img class="img-thumbnail" src='{{image.uri}}'></img></a><div><a href="{{image.src}}">{{image.src | basename}}</a></div></div>
+        {% endfor %}
+      </div>
   </body>
 </html>

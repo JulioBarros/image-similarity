@@ -1,23 +1,23 @@
 import argparse
-import glob
-import fnmatch
 import os
 import pathlib
 
 import numpy as np
 import keras
-from keras.models import Model
+import keras.applications as kapp
 from PIL import Image, ExifTags
 import random
 import scipy
 
 from collections import namedtuple
-from jinja2 import Environment, FileSystemLoader, select_autoescape
+from jinja2 import Environment, FileSystemLoader
 
 
+# Define a named tuple to keep our image information together
 ImageFile = namedtuple("ImageFile", "src filename path uri")
 
 
+# Define a new filter for jinja to get the name of the file from a path
 def basename(text):
     return text.split(os.path.sep)[-1]
 
@@ -27,6 +27,7 @@ env.filters["basename"] = basename
 
 
 def is_image(filename):
+    """ Checks the extension of the file to judge if it an image or not. """
     fn = filename.lower()
     return fn.endswith("jpg") or fn.endswith("jpeg") or fn.endswith("png")
 
@@ -41,17 +42,20 @@ def find_image_files(root):
     return file_names
 
 
-def build_model():
-    base_model = keras.applications.resnet50.ResNet50()
-    input_layer = base_model.input
-    target_layer = base_model.layers[-2]
-
-    model = Model(inputs=input_layer, outputs=target_layer.output)
-
-    return model, 2048
+def build_model(model_name):
+    """ Create a pretrained model without the final classification layer. """
+    if model_name == "resnet50":
+        model = kapp.resnet50.ResNet50(weights="imagenet", include_top=False)
+        return model, kapp.resnet50.preprocess_input
+    elif model_name == "vgg16":
+        model = kapp.vgg16.VGG16(weights="imagenet", include_top=False)
+        return model, kapp.vgg16.preprocess_input
+    else:
+        raise Exception("Unsupported model error")
 
 
 def fix_orientation(image):
+    """ Look in the EXIF headers to see if this image should be rotated. """
     try:
         for orientation in ExifTags.TAGS.keys():
             if ExifTags.TAGS[orientation] == "Orientation":
@@ -70,6 +74,7 @@ def fix_orientation(image):
 
 
 def extract_center(image):
+    """ Most of the models need a small square image. Extract it from the center of our image."""
     width, height = image.size
     new_width = new_height = min(width, height)
 
@@ -81,7 +86,9 @@ def extract_center(image):
     return image.crop((left, top, right, bottom))
 
 
-def process_images(file_names):
+def process_images(file_names, preprocess_fn):
+    """ Take a list of image filenames, load the images, rotate and extract the centers, 
+    process the data and return an array with image data. """
     image_size = 224
     print_interval = len(file_names) / 10
 
@@ -92,36 +99,49 @@ def process_images(file_names):
         im = extract_center(im)
         im = im.resize((image_size, image_size))
         im = im.convert(mode="RGB")
-        image_data[i] = np.array(im)
         filename = os.path.join(ifn.path, ifn.filename + ".jpg")
         im.save(filename)
+        image_data[i] = np.array(im)
         if i % print_interval == 0:
             print("Processing image:", i, "of", len(file_names))
-    return image_data
+    return preprocess_fn(image_data)
 
 
 def generate_features(model, images):
     return model.predict(images)
 
 
-def find_similar_images(image_features, target_image_vector, num_picks=13):
-    v = target_image_vector.reshape(1, -1)
-    dist = scipy.spatial.distance.cdist(image_features, v, "cosine").reshape(-1)
-
-    return np.argsort(dist)[:num_picks]
+def calculate_distances(features):
+    return scipy.spatial.distance.cdist(features, features, "cosine")
 
 
 def generate_site(output_path, names, features):
-    template = env.get_template("image.html")
+    """ Take the features and image information. Find the closest features and
+    and generate static html files with similar images."""
 
+    template = env.get_template("image.html")
+    print_interval = len(names) / 10
+
+    # Calculate all pairwise distances
+    distances = calculate_distances(features)
+
+    # Go through each image, sort the distances and generate the html file
     for idx, ifn in enumerate(names):
         output_filename = os.path.join(output_path, ifn.filename + ".html")
-        target_image = features[idx]
-        similar_image_indexes = find_similar_images(features, target_image)
+        dist = distances[idx]
+        similar_image_indexes = np.argsort(dist)[:13]
+        dissimilar_image_indexes = np.argsort(dist)[-12:]
         similar_images = [names[i] for i in similar_image_indexes if i != idx]
-        html = template.render(target_image=ifn, similar_images=similar_images)
+        dissimilar_images = [names[i] for i in dissimilar_image_indexes if i != idx]
+        html = template.render(
+            target_image=ifn,
+            similar_images=similar_images,
+            dissimilar_images=dissimilar_images,
+        )
         with open(output_filename, "w") as text_file:
             text_file.write(html)
+        if idx % print_interval == 0:
+            print("Generating page:", idx, "of", len(names))
 
     template = env.get_template("index.html")
     with open(os.path.join(output_path, "index.html"), "w") as text_file:
@@ -129,6 +149,8 @@ def generate_site(output_path, names, features):
 
 
 def parse_args():
+    """Set up the various command line parameters."""
+
     parser = argparse.ArgumentParser(description="Image similarity")
 
     parser.add_argument(
@@ -153,6 +175,14 @@ def parse_args():
         default=1000,
     )
 
+    parser.add_argument(
+        "-m",
+        "--model",
+        help="The model to use to extract features.",
+        choices=["resnet50", "vgg16"],
+        default="vgg16",
+    )
+
     return parser.parse_args()
 
 
@@ -166,6 +196,8 @@ def main():
     output_dir = parser.outputdir
     image_output_dir = os.path.join(output_dir, "images")
     num_images = parser.num_images
+
+    model, preprocess_fn = build_model(parser.model)
 
     # Find the image files and if we want to use less than are available pick them randomly
     image_file_names = find_image_files(input_dir)
@@ -184,16 +216,18 @@ def main():
     ]
     ensure_directory(image_output_dir)
 
-    image_data = process_images(image_files)
+    image_data = process_images(image_files, preprocess_fn)
+    print("Image data shape:", image_data.shape)
 
     # create the model and run predict on the image data to generate the features
     print("Generating features for images")
-    model, _ = build_model()
     features = generate_features(model, image_data)
+    features = features.reshape(features.shape[0], -1)
+    print("features shape:", features.shape)
 
     # generate the static pages using the images and feature matrix
     print("Generating static pages")
-    generate_site("public", image_files, features)
+    generate_site(output_dir, image_files, features)
     print("Done")
 
 
