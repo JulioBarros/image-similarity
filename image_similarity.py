@@ -6,9 +6,12 @@ import numpy as np
 import keras
 import keras.applications as kapp
 from PIL import Image, ExifTags
+from PIL import Image as pil_image
 import random
 import scipy
-
+import pickle
+import json
+    
 from collections import namedtuple
 from jinja2 import Environment, FileSystemLoader
 
@@ -49,6 +52,10 @@ def build_model(model_name):
         return model, kapp.resnet50.preprocess_input
     elif model_name == "vgg16":
         model = kapp.vgg16.VGG16(weights="imagenet", include_top=False)
+        return model, kapp.vgg16.preprocess_input
+    elif model_name == "vgg16block4":
+        base_model = kapp.vgg16.VGG16(weights='imagenet')
+        model = keras.models.Model(inputs=base_model.input, outputs=base_model.get_layer('block4_pool').output)
         return model, kapp.vgg16.preprocess_input
     else:
         raise Exception("Unsupported model error")
@@ -96,8 +103,8 @@ def process_images(file_names, preprocess_fn):
     for i, ifn in enumerate(file_names):
         im = Image.open(ifn.src)
         im = fix_orientation(im)
-        im = extract_center(im)
-        im = im.resize((image_size, image_size))
+#        im = extract_center(im)
+        im = im.resize((image_size, image_size)) #,pil_image.NEAREST)
         im = im.convert(mode="RGB")
         filename = os.path.join(ifn.path, ifn.filename + ".jpg")
         im.save(filename)
@@ -123,8 +130,11 @@ def generate_site(output_path, names, features):
     print_interval = len(names) / 10
 
     # Calculate all pairwise distances
+    print("Calculating distances")
     distances = calculate_distances(features)
 
+    print("Generating static pages")
+    results = []
     # Go through each image, sort the distances and generate the html file
     for idx, ifn in enumerate(names):
         output_filename = os.path.join(output_path, ifn.filename + ".html")
@@ -143,9 +153,13 @@ def generate_site(output_path, names, features):
         if idx % print_interval == 0:
             print("Generating page:", idx, "of", len(names))
 
+        results.append({"filename" : ifn.filename, "most" : similar_images, "least" : dissimilar_images })
+
     template = env.get_template("index.html")
     with open(os.path.join(output_path, "index.html"), "w") as text_file:
         text_file.write(template.render(num_images=len(names)))
+
+    return results
 
 
 def parse_args():
@@ -163,7 +177,7 @@ def parse_args():
     parser.add_argument(
         "-o",
         "--outputdir",
-        help="The directory to write output htmls files",
+        help="The directory to write output html files",
         default="./public",
     )
 
@@ -179,7 +193,7 @@ def parse_args():
         "-m",
         "--model",
         help="The model to use to extract features.",
-        choices=["resnet50", "vgg16"],
+        choices=["resnet50", "vgg16", "vgg16block4"],
         default="vgg16",
     )
 
@@ -197,6 +211,7 @@ def main():
     image_output_dir = os.path.join(output_dir, "images")
     num_images = parser.num_images
 
+    ensure_directory(image_output_dir)
     model, preprocess_fn = build_model(parser.model)
 
     # Find the image files and if we want to use less than are available pick them randomly
@@ -205,16 +220,20 @@ def main():
 
     if n > num_images:
         n = num_images
-        image_file_names = random.sample(image_file_names, n)
+        # image_file_names = random.sample(image_file_names, n)
+        image_file_names = image_file_names[:n]
 
     print(f"Using {n} images from {input_dir}")
+    with open(os.path.join(output_dir, 'image_file_names.txt'), 'w') as f:
+        for ifn in image_file_names:
+            f.write("%s\n" % ifn)
 
     # namedtuple('ImageFile', 'src filename path uri')
     image_files = [
         ImageFile(src_file, str(i), image_output_dir, "images/" + str(i) + ".jpg")
         for i, src_file in enumerate(image_file_names)
     ]
-    ensure_directory(image_output_dir)
+
 
     image_data = process_images(image_files, preprocess_fn)
     print("Image data shape:", image_data.shape)
@@ -224,10 +243,15 @@ def main():
     features = generate_features(model, image_data)
     features = features.reshape(features.shape[0], -1)
     print("features shape:", features.shape)
+    with open(os.path.join(output_dir, 'features.pickle'), 'wb') as f:
+        pickle.dump(features, f, protocol=pickle.HIGHEST_PROTOCOL)
 
     # generate the static pages using the images and feature matrix
-    print("Generating static pages")
-    generate_site(output_dir, image_files, features)
+    matches = generate_site(output_dir, image_files, features)
+    print("Writing out features pickle file")
+    with open(os.path.join(output_dir, 'matches.json'), 'w') as outfile:
+        json.dump(matches, outfile)
+        
     print("Done")
 
 
